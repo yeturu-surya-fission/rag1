@@ -52,19 +52,14 @@ def rewrite_query(query: str) -> str:
     )
 
     prompt = f"""
-Rewrite the user query to improve retrieval from formal documents.
+Rewrite the query to improve retrieval.
 
 Rules:
-1. Keep the original meaning EXACTLY
-2. Do NOT remove important details
-3. Expand with relevant terms if needed
-4. Do NOT make it overly generic
-5. Keep it specific and descriptive
-
-User Query:
-{query}
-
-Rewritten Query:
+1. Keep it SHORT (max 8–10 words)
+2. Preserve original meaning
+3. Do NOT over-explain
+4. Use terms likely present in documents
+5. Avoid unnecessary adjectives
 
 User Query:
 {query}

@@ -1,4 +1,5 @@
 import os
+import time
 
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -11,6 +12,13 @@ load_dotenv()
 def get_setting(name, default):
     value = os.getenv(name)
     return default if value is None or value == "" else value
+
+
+def get_int_setting(name, default):
+    try:
+        return int(get_setting(name, str(default)))
+    except ValueError:
+        return default
 
 
 def create_embeddings(chunks):
@@ -30,8 +38,24 @@ def create_embeddings(chunks):
     )
 
     texts = [chunk.page_content for chunk in chunks]
+    batch_size = max(1, get_int_setting("EMBEDDING_BATCH_SIZE", 10))
+    pause_seconds = max(0.0, float(get_setting("EMBEDDING_BATCH_DELAY", "1.0")))
+    max_retries = max(0, get_int_setting("EMBEDDING_MAX_RETRIES", 5))
+    vectors = []
 
-    vectors = embeddings.embed_documents(texts)
+    for start in range(0, len(texts), batch_size):
+        batch = texts[start:start + batch_size]
+        for attempt in range(max_retries + 1):
+            try:
+                vectors.extend(embeddings.embed_documents(batch))
+                break
+            except Exception:
+                if attempt >= max_retries:
+                    raise
+                time.sleep(min(60.0, 2 ** attempt))
+
+        if start + batch_size < len(texts):
+            time.sleep(pause_seconds)
 
     return vectors
 

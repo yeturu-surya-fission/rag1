@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from chunking import load_and_chunk_pdf
@@ -9,36 +10,63 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from hybrid_search import hybrid_search
 from bm25_search import build_bm25
-from query_rewriter import rewrite_query
-from reranker import rerank_chunks
 from storage import (
     save_index,
     load_index,
     save_chunks,
     load_chunks,
     index_exists,
+    save_manifest,
 )
 
 import faiss
 import numpy as np
+from cache import (
+    load_cache as load_query_cache,
+    save_cache as save_query_cache,
+    normalize_query,
+)
+from semantic_cache import (
+    load_cache as load_semantic_cache,
+    save_cache as save_semantic_cache,
+    add_to_cache,
+    find_similar,
+)
 
+cache = load_query_cache()
+semantic_cache = load_semantic_cache()
 load_dotenv()
 
 
 def setup():
-    file_path = "data/company-policy.pdf"
+    pdf_paths = sorted(Path("data").glob("*.pdf"))
+    if not pdf_paths:
+        raise FileNotFoundError("No PDF files found in the data directory.")
 
-    if index_exists():
+    manifest = {
+        str(path): {
+            "size": path.stat().st_size,
+            "modified_ns": path.stat().st_mtime_ns,
+        }
+        for path in pdf_paths
+    }
+
+    if index_exists(manifest):
         print("Loading existing index...")
         index = load_index()
         chunks = load_chunks()
     else:
-        print("Creating new index...")
-        chunks = load_and_chunk_pdf(file_path)
+        print(f"Creating index for {len(pdf_paths)} PDF file(s)...")
+        chunks = []
+        for pdf_path in pdf_paths:
+            print(f"Chunking {pdf_path.name}...")
+            chunks.extend(load_and_chunk_pdf(str(pdf_path)))
+
         vectors = create_embeddings(chunks)
         index = build_faiss_index(chunks, vectors)
         save_index(index)
         save_chunks(chunks)
+        save_manifest(manifest)
 
     bm25, _ = build_bm25(chunks)
     return index, chunks, bm25
@@ -93,51 +121,58 @@ def extract_text_content(content):
 
 
 def generate_answer(query, index, chunks, bm25):
+    api_key = get_gemini_api_key()
+    top_k = get_top_k()
 
     embed_model = GoogleGenerativeAIEmbeddings(
-        model="models/embedding-001"
+        model=get_setting("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2-preview"),
+        api_key=api_key,
     )
+    normalized_query = normalize_query(query)
 
-    # ---- Step 1: Rewrite ----
-    rewritten = rewrite_query(query)
+    # Check the exact cache before making any API request.
+    if normalized_query in cache:
+        print("Cache hit ⚡")
+        return cache[normalized_query]
 
-    print(f"\nOriginal: {query}")
-    print(f"Rewritten: {rewritten}\n")
+    # One embedding powers both semantic-cache lookup and FAISS retrieval.
+    query_embedding = embed_model.embed_query(query)
+    cached_answer = find_similar(query, query_embedding, semantic_cache)
+    if cached_answer:
+        return cached_answer
 
-    # ---- Step 2: Retrieval ----
-    res1 = hybrid_search(query, index, bm25, chunks, embed_model, top_k=5)
-    res2 = hybrid_search(rewritten, index, bm25, chunks, embed_model, top_k=5)
+    print("Cache miss -> running RAG")
 
-    # ---- Step 3: Combine ----
-    combined = []
-    seen = set()
-
-    for doc in res1 + res2:
-        if doc.page_content not in seen:
-            combined.append(doc)
-            seen.add(doc.page_content)
-
-    # ---- Step 4: Rerank ----
-    reranked = rerank_chunks(query, combined)
-
-    # ---- Step 5: Final Selection ----
-    final_chunks = reranked[:5]
+    # One retrieval pass: FAISS uses the existing vector and BM25 uses the text.
+    final_chunks = hybrid_search(
+        query,
+        index,
+        bm25,
+        chunks,
+        embed_model,
+        top_k=top_k,
+        query_vector=query_embedding,
+    )
 
     # ---- Step 6: Build Context ----
     context = "\n\n".join([c.page_content for c in final_chunks])
 
     # ---- Step 7: LLM ----
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash"
+        model=get_setting("GEMINI_GENERATION_MODEL", "gemini-3.1-flash-lite"),
+        api_key=api_key,
     )
 
     prompt = f"""
-You are an assistant that answers questions using the given context.
+You are an assistant answering questions from company policy documents.
 
 Rules:
-1. Combine information from multiple parts if needed
-2. Be accurate and concise
-3. If no relevant info exists, say "I don't know"
+1. Answer ONLY what the user asked
+2. Be concise and direct
+3. Do NOT list all related information unless asked
+4. If the question is specific, give a specific answer
+5. Use bullet points ONLY if needed
+6. If multiple types exist, summarize briefly
 
 Context:
 {context}
@@ -149,8 +184,20 @@ Answer:
 """
 
     response = llm.invoke(prompt)
+    answer = extract_text_content(response.content).strip()
+    cache[normalized_query] = answer
+    save_query_cache(cache)
+    semantic_cache.append(add_to_cache(query, query_embedding, answer))
+    save_semantic_cache(semantic_cache)
+    print(f"Cache size: {len(cache)}")
+    
 
-    return response.content
+
+    return answer
+    
+    
+
+    
 
 # -------- Step 3: Run Chat -------- #
 
