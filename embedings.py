@@ -6,7 +6,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from chunking import load_and_chunk_pdf
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def get_setting(name, default):

@@ -101,8 +101,8 @@ def find_similar(query, query_embedding, cache):
             best_answer = item["answer"]
 
     if best_score >= SIMILARITY_THRESHOLD:
-        print(f"Semantic Cache hit ⚡ (score: {best_score:.2f})")
+        print(f"Semantic Cache hit (score: {best_score:.2f})")
         return best_answer
 
-    print(f"Semantic Cache miss ❌ (best score: {best_score:.2f})")
+    print(f"Semantic Cache miss (best score: {best_score:.2f})")
     return None

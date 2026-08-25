@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def get_setting(name, default):
@@ -47,7 +47,7 @@ def rewrite_query(query: str) -> str:
     """
 
     llm = ChatGoogleGenerativeAI(
-        model=get_setting("GEMINI_GENERATION_MODEL", "gemini-3.5-flash"),
+        model=get_setting("GEMINI_GENERATION_MODEL", "gemini-2.5-flash"),
         api_key=get_gemini_api_key(),
     )
 

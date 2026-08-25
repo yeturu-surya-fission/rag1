@@ -4,7 +4,30 @@ import re
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-load_dotenv()
+load_dotenv(override=True)
+
+
+def extract_text_content(content):
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        texts = []
+        for item in content:
+            if isinstance(item, dict):
+                if isinstance(item.get("text"), str):
+                    texts.append(item["text"])
+                elif isinstance(item.get("content"), str):
+                    texts.append(item["content"])
+            elif hasattr(item, "text") and isinstance(item.text, str):
+                texts.append(item.text)
+        if texts:
+            return "\n".join(texts)
+
+    if hasattr(content, "text") and isinstance(content.text, str):
+        return content.text
+
+    return str(content)
 
 
 def rerank_chunks(query, chunks):
@@ -20,7 +43,7 @@ def rerank_chunks(query, chunks):
         raise ValueError("Missing Gemini API key. Set GOOGLE_API_KEY or GEMINI_API_KEY in your .env file.")
 
     llm = ChatGoogleGenerativeAI(
-        model=os.getenv("GEMINI_GENERATION_MODEL", "gemini-3.5-flash"),
+        model=os.getenv("GEMINI_GENERATION_MODEL", "gemini-2.5-flash"),
         api_key=api_key,
     )
 
@@ -47,13 +70,7 @@ Return exactly one integer score per chunk, in chunk order, separated by commas.
 """
 
     response = llm.invoke(prompt)
-    content = response.content
-    if isinstance(content, list):
-        content = " ".join(
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict)
-        )
+    content = extract_text_content(response.content)
 
     scores = [int(value) for value in re.findall(r"\b(?:10|[1-9])\b", str(content))]
     scores = (scores + [0] * len(chunks))[:len(chunks)]

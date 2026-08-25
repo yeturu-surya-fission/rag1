@@ -2,7 +2,7 @@ import faiss
 import numpy as np
 from chunking import load_and_chunk_pdf
 from embedings import create_embeddings
-from embedings import GoogleGenerativeAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 
 def build_faiss_index(chunks, vectors):

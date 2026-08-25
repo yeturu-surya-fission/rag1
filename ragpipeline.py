@@ -19,23 +19,26 @@ from storage import (
     save_manifest,
 )
 
-import faiss
-import numpy as np
-from cache import (
-    load_cache as load_query_cache,
-    save_cache as save_query_cache,
-    normalize_query,
-)
-from semantic_cache import (
-    load_cache as load_semantic_cache,
-    save_cache as save_semantic_cache,
-    add_to_cache,
-    find_similar,
-)
+load_dotenv(override=True)
 
-cache = load_query_cache()
-semantic_cache = load_semantic_cache()
-load_dotenv()
+
+def get_setting(name, default):
+    value = os.getenv(name)
+    return default if value is None or value == "" else value
+
+
+def get_gemini_api_key():
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("Missing Gemini API key. Set GOOGLE_API_KEY or GEMINI_API_KEY in your .env file.")
+    return api_key
+
+
+def get_top_k(default=5):
+    try:
+        return int(get_setting("TOP_K", str(default)))
+    except ValueError:
+        return default
 
 
 def setup():
@@ -71,28 +74,6 @@ def setup():
     bm25, _ = build_bm25(chunks)
     return index, chunks, bm25
 
-def get_setting(name, default):
-    value = os.getenv(name)
-    return default if value is None or value == "" else value
-
-
-def get_gemini_api_key():
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("Missing Gemini API key. Set GOOGLE_API_KEY or GEMINI_API_KEY in your .env file.")
-    return api_key
-
-
-def get_top_k(default=5):
-    try:
-        return int(get_setting("TOP_K", str(default)))
-    except ValueError:
-        return default
-
-
-# -------- Step 1: Build / Load Index -------- #
-
-# -------- Step 2: Generate Answer -------- #
 
 def extract_text_content(content):
     if isinstance(content, str):
@@ -117,9 +98,6 @@ def extract_text_content(content):
     return str(content)
 
 
-
-
-
 def generate_answer(query, index, chunks, bm25):
     api_key = get_gemini_api_key()
     top_k = get_top_k()
@@ -128,22 +106,12 @@ def generate_answer(query, index, chunks, bm25):
         model=get_setting("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2-preview"),
         api_key=api_key,
     )
-    normalized_query = normalize_query(query)
 
-    # Check the exact cache before making any API request.
-    if normalized_query in cache:
-        print("Cache hit ⚡")
-        return cache[normalized_query]
+    print(f"Retrieving context for query: '{query}'...")
 
-    # One embedding powers both semantic-cache lookup and FAISS retrieval.
+    # Embed query and perform hybrid search
     query_embedding = embed_model.embed_query(query)
-    cached_answer = find_similar(query, query_embedding, semantic_cache)
-    if cached_answer:
-        return cached_answer
 
-    print("Cache miss -> running RAG")
-
-    # One retrieval pass: FAISS uses the existing vector and BM25 uses the text.
     final_chunks = hybrid_search(
         query,
         index,
@@ -154,25 +122,23 @@ def generate_answer(query, index, chunks, bm25):
         query_vector=query_embedding,
     )
 
-    # ---- Step 6: Build Context ----
+    # Build Context from retrieved chunks
     context = "\n\n".join([c.page_content for c in final_chunks])
 
-    # ---- Step 7: LLM ----
+    # LLM generation
     llm = ChatGoogleGenerativeAI(
-        model=get_setting("GEMINI_GENERATION_MODEL", "gemini-3.1-flash-lite"),
+        model=get_setting("GEMINI_GENERATION_MODEL", "gemini-2.5-flash"),
         api_key=api_key,
     )
 
     prompt = f"""
-You are an assistant answering questions from company policy documents.
+You are an assistant answering questions from company policy and documentation.
 
 Rules:
-1. Answer ONLY what the user asked
-2. Be concise and direct
-3. Do NOT list all related information unless asked
-4. If the question is specific, give a specific answer
-5. Use bullet points ONLY if needed
-6. If multiple types exist, summarize briefly
+1. Answer accurately based on the provided Context.
+2. If the answer cannot be found in the context, clearly state that the information is not available in the provided documents.
+3. Be concise, direct, and well-structured.
+4. If multiple points or types exist, summarize clearly.
 
 Context:
 {context}
@@ -183,37 +149,26 @@ Question:
 Answer:
 """
 
+    print("Generating response...")
     response = llm.invoke(prompt)
     answer = extract_text_content(response.content).strip()
-    cache[normalized_query] = answer
-    save_query_cache(cache)
-    semantic_cache.append(add_to_cache(query, query_embedding, answer))
-    save_semantic_cache(semantic_cache)
-    print(f"Cache size: {len(cache)}")
-    
-
 
     return answer
-    
-    
 
-    
-
-# -------- Step 3: Run Chat -------- #
 
 if __name__ == "__main__":
-
     index, chunks, bm25 = setup()
-
-    print("RAG Ready (Persistent Mode)\n")
+    print("RAG Ready (No Cache Mode)\n")
 
     while True:
-        q = input("Ask: ")
+        try:
+            q = input("Ask: ")
+        except (EOFError, KeyboardInterrupt):
+            break
 
-        if q.lower() == "exit":
+        if not q or q.lower() == "exit":
             break
 
         ans = generate_answer(q, index, chunks, bm25)
-
         print("\nAnswer:", ans)
         print("-" * 50)
