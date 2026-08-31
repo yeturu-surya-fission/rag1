@@ -132,7 +132,7 @@ def generate_answer(query, index, chunks, bm25):
     )
 
     prompt = f"""
-You are an assistant answering questions from company policy and documentation.
+You are an assistant answering questions from  documentation.
 
 Rules:
 1. Answer accurately based on the provided Context.
